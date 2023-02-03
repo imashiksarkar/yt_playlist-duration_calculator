@@ -1,5 +1,6 @@
 const dotenv = require("dotenv");
 const axios = require("axios");
+const fs = require("node:fs");
 
 // init dotenv
 dotenv.config();
@@ -17,26 +18,49 @@ class Youtube {
     return match ? match[1] : null;
   }
   async #getVideoIds(playlistId) {
-    const res = await axios.get(this.#PLAYLIST_URL, {
-      params: {
-        part: "snippet",
-        maxResults: 50,
-        playlistId,
-        key: this.#API_KEY,
-      },
-    });
-    //video ids in an array
-    return res.data.items.map((video) => video.snippet.resourceId.videoId);
+    try {
+      const videoIds = [];
+      let totalNumberOfVideos = 0,
+        nextPage = null;
+      do {
+        const res = await axios.get(this.#PLAYLIST_URL, {
+          params: {
+            part: "snippet",
+            maxResults: 2,
+            playlistId,
+            key: this.#API_KEY,
+            pageToken: nextPage,
+          },
+        });
+        // getting total videos count
+        if (!totalNumberOfVideos)
+          totalNumberOfVideos = res.data.pageInfo.totalResults;
+
+        // if next page available
+        nextPage = res.data?.nextPageToken ?? null;
+
+        res.data.items.map((video) =>
+          videoIds.push(video.snippet.resourceId.videoId)
+        );
+      } while (nextPage);
+      return { totalVideos: totalNumberOfVideos, videoIds };
+    } catch (error) {
+      console.log(error);
+    }
   }
   async #getVideos(videoIds) {
-    const res = await axios.get(this.#VIDEOS_URL, {
-      params: {
-        part: "contentDetails",
-        id: videoIds.join(","),
-        key: this.#API_KEY,
-      },
-    });
-    return res.data.items;
+    try {
+      const res = await axios.get(this.#VIDEOS_URL, {
+        params: {
+          part: "contentDetails",
+          id: videoIds.join(","),
+          key: this.#API_KEY,
+        },
+      });
+      return res.data.items;
+    } catch (error) {
+      console.log(error);
+    }
   }
   #totalLengthInSeconds(durationStr = null) {
     if (!durationStr || typeof durationStr !== "string") return 0;
@@ -57,28 +81,32 @@ class Youtube {
   }
   async calcAll(playlistURL) {
     const playlistId = this.#getPlaylistId(playlistURL);
-    const videoIds = await this.#getVideoIds(playlistId);
+    const { totalVideos, videoIds } = await this.#getVideoIds(playlistId);
     const videos = await this.#getVideos(videoIds);
     const totalPlaylistLengthInSec = videos.reduce((acc, curr) => {
       acc += this.#totalLengthInSeconds(curr.contentDetails.duration);
       return acc;
     }, 0);
-    return totalPlaylistLengthInSec;
+    return { totalVideos, duration: totalPlaylistLengthInSec };
   }
   static async getPlaylistDuration(playlistURL) {
     const yt = new this();
     return await yt.calcAll(playlistURL);
   }
 }
-Youtube.getPlaylistDuration(
-  "https://youtube.com/playlist?list=PLXQpH_kZIxTWQfh_krE4sI_8etq5rH_z6"
-).then((res) => {
-  let secLeft = res;
-  const days = parseInt(secLeft / (60 * 60 * 24));
-  secLeft = secLeft % (60 * 60 * 24);
-  const hours = parseInt(secLeft / (60 * 60));
-  secLeft = secLeft % (60 * 60);
-  const minutes = parseInt(secLeft / 60);
-  secLeft = secLeft % 60;
-  console.log(days, "d\n", hours, "h\n", minutes, "m\n", secLeft, "s");
-});
+function main() {
+  Youtube.getPlaylistDuration(
+    "https://youtube.com/playlist?list=PLXQpH_kZIxTWQfh_krE4sI_8etq5rH_z6"
+  ).then((res) => {
+    console.log(res.totalVideos);
+    let secLeft = res.duration;
+    const days = parseInt(secLeft / (60 * 60 * 24));
+    secLeft = secLeft % (60 * 60 * 24);
+    const hours = parseInt(secLeft / (60 * 60));
+    secLeft = secLeft % (60 * 60);
+    const minutes = parseInt(secLeft / 60);
+    secLeft = secLeft % 60;
+    console.log(days, "d\n", hours, "h\n", minutes, "m\n", secLeft, "s");
+  });
+}
+main();
